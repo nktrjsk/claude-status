@@ -17,18 +17,13 @@ struct CStatusRecord {
     let projectDir: URL
 }
 
-/// Discovers Claude Code sessions by scanning `~/.claude/projects/` for `.cstatus` files
-/// and validating that the referenced processes are still alive.
+/// Discovers Claude Code sessions by scanning each profile's `projects/` directory
+/// for `.cstatus` files and validating that the referenced processes are still alive.
 struct SessionDiscovery {
 
     /// Sessions confirmed dead — skip on subsequent scans until invalidated.
     /// Keyed by session ID (UUID string from the .cstatus filename).
     var deadSessions: Set<String> = []
-
-    private static let claudeProjectsDir: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
-    }()
 
     // MARK: - Discovery
 
@@ -38,30 +33,31 @@ struct SessionDiscovery {
         let cstatusFiles: [String: URL]  // sessionId → .cstatus URL
     }
 
-    /// Full scan: find all .cstatus files, validate PIDs, classify sources.
-    /// Returns assembled sessions and updates `deadSessions` for any that are gone.
-    mutating func discoverAll() -> DiscoveryResult {
-        let records = scanCStatusFiles()
+    /// Full scan across all given profiles: find all .cstatus files, validate PIDs,
+    /// classify sources. Updates `deadSessions` for any that are gone.
+    mutating func discoverAll(profiles: [ClaudeProfile]) -> DiscoveryResult {
         var sessions: [ClaudeSession] = []
         var cstatusFiles: [String: URL] = [:]
 
-        for record in records {
-            if deadSessions.contains(record.sessionId) {
-                continue
+        for profile in profiles {
+            for record in scanCStatusFiles(in: profile.projectsDirectory) {
+                if deadSessions.contains(record.sessionId) {
+                    continue
+                }
+                guard isProcessAlive(record.pid) else {
+                    deadSessions.insert(record.sessionId)
+                    continue
+                }
+                sessions.append(assembleSession(from: record, profileName: profile.displayName))
+                cstatusFiles[record.sessionId] = record.fileURL
             }
-            guard isProcessAlive(record.pid) else {
-                deadSessions.insert(record.sessionId)
-                continue
-            }
-            sessions.append(assembleSession(from: record))
-            cstatusFiles[record.sessionId] = record.fileURL
         }
         return DiscoveryResult(sessions: sessions, cstatusFiles: cstatusFiles)
     }
 
     /// Fast refresh: re-read only .cstatus files (no directory enumeration needed
     /// if we already have cached paths). Falls back to full scan.
-    mutating func refreshFromCache(_ cache: [String: URL]) -> DiscoveryResult {
+    mutating func refreshFromCache(_ cache: [String: URL], profiles: [ClaudeProfile]) -> DiscoveryResult {
         var sessions: [ClaudeSession] = []
         var cstatusFiles: [String: URL] = [:]
 
@@ -77,10 +73,15 @@ struct SessionDiscovery {
                 deadSessions.insert(record.sessionId)
                 continue
             }
-            sessions.append(assembleSession(from: record))
+            sessions.append(assembleSession(from: record, profileName: profileName(for: url, in: profiles)))
             cstatusFiles[record.sessionId] = record.fileURL
         }
         return DiscoveryResult(sessions: sessions, cstatusFiles: cstatusFiles)
+    }
+
+    /// Resolves the owning profile of a .cstatus file by path prefix.
+    private func profileName(for url: URL, in profiles: [ClaudeProfile]) -> String? {
+        profiles.first { url.path.hasPrefix($0.projectsDirectory.path + "/") }?.displayName
     }
 
     /// Clears the dead session list (e.g. after a Darwin notification
@@ -96,10 +97,9 @@ struct SessionDiscovery {
 
     // MARK: - File Scanning
 
-    /// Enumerates all `.cstatus` files under `~/.claude/projects/*/`.
-    private func scanCStatusFiles() -> [CStatusRecord] {
+    /// Enumerates all `.cstatus` files under `<profile>/projects/*/`.
+    private func scanCStatusFiles(in projectsDir: URL) -> [CStatusRecord] {
         let fm = FileManager.default
-        let projectsDir = Self.claudeProjectsDir
 
         guard let projectDirs = try? fm.contentsOfDirectory(
             at: projectsDir,
@@ -178,7 +178,7 @@ struct SessionDiscovery {
     // MARK: - Session Assembly
 
     /// Builds a `ClaudeSession` from a validated `CStatusRecord`.
-    private func assembleSession(from record: CStatusRecord) -> ClaudeSession {
+    private func assembleSession(from record: CStatusRecord, profileName: String?) -> ClaudeSession {
         let source = classifySource(pid: record.pid, ppid: record.ppid)
         let projectName = (record.cwd as NSString).lastPathComponent
 
@@ -221,7 +221,8 @@ struct SessionDiscovery {
             tmuxSocket: tmuxSocket,
             source: source,
             activity: record.activity,
-            sessionName: record.sessionName
+            sessionName: record.sessionName,
+            profileName: profileName
         )
     }
 

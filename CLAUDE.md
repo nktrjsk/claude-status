@@ -60,9 +60,10 @@ Claude Status/                         # Main app target
   Info.plist                           # Sparkle feed URL, URL scheme
   Claude Status.entitlements           # App Groups (no sandbox)
   SessionDiscovery/                    # Core session monitoring
-    SessionDiscovery.swift             # Scans ~/.claude/projects/*/*.cstatus, validates PIDs, classifies source
+    ClaudeProfile.swift                # ClaudeProfile model + ProfileStore (multi-profile config dirs)
+    SessionDiscovery.swift             # Scans each profile's projects/*/*.cstatus, validates PIDs, classifies source
     SessionMonitor.swift               # @Observable class: Darwin notifications + file watching + 5s polling
-    StateResolver.swift                # DispatchSource file watcher; JSONL timestamp fallback
+    StateResolver.swift                # DispatchSource file watchers (one per profile); JSONL timestamp fallback
     ITermFocuser.swift                 # Focuses host app (AppleScript for iTerm2, process activation for others)
     ProductivityTracker.swift          # Time-in-state tracking, concurrency, score (persists to App Group)
     PluginDetector.swift               # Checks installed_plugins.json and settings.json for hook status
@@ -104,14 +105,18 @@ claude-plugin/                         # Bundled Claude Code plugin
 assets/                                # Marketing assets (screenshot, icons)
 ```
 
+### Profiles
+
+The app supports multiple Claude Code profiles (config dirs selected via `CLAUDE_CONFIG_DIR`). `ProfileStore` auto-detects `~/.claude` and `~/.claude-*` directories (validated by a `projects/` dir or `settings.json`); custom locations can be added manually in Settings. Each profile can be enabled/disabled and renamed; settings persist in the App Group defaults under `claudeProfiles`. Discovery, file watching, and plugin detection/installation all operate per enabled profile (the installer passes `CLAUDE_CONFIG_DIR` to the `claude` CLI). The hook plugin needs no profile awareness — it writes `.cstatus` next to the transcript path Claude Code provides, which already lives in the profile's `projects/` dir.
+
 ### Session Discovery Pipeline
 
-1. **Plugin hook** (`session-status.py`) fires on Claude Code lifecycle events and writes `.cstatus` JSON to `~/.claude/projects/<encoded-path>/<session-id>.cstatus`
-2. **SessionDiscovery** scans `~/.claude/projects/*/` for `.cstatus` files, parses JSON (session ID, PID, state, activity, cwd), validates PIDs with `kill(pid, 0)`
+1. **Plugin hook** (`session-status`) fires on Claude Code lifecycle events and writes `.cstatus` JSON to `<profile>/projects/<encoded-path>/<session-id>.cstatus`
+2. **SessionDiscovery** scans each enabled profile's `projects/*/` for `.cstatus` files, parses JSON (session ID, PID, state, activity, cwd), validates PIDs with `kill(pid, 0)`
 3. **Source classification** walks the process tree via `proc_pidinfo`/`proc_pidpath` and reads environment variables via `sysctl KERN_PROCARGS2` to identify the host app
 4. **SessionMonitor** (`@Observable`) maintains the session list with three update mechanisms:
    - **Darwin notifications** (instant) — hook posts `com.poisonpenllc.Claude-Status.session-changed` via `notifyutil -p`
-   - **File system watching** (fast) — `DispatchSource` on `~/.claude/projects/`
+   - **File system watching** (fast) — `DispatchSource` on each enabled profile's `projects/` dir
    - **Polling timer** (5s fallback) — catches sessions without hooks (IDE agents)
 
 ### Session State
@@ -140,6 +145,7 @@ State is reported by the hook script in `.cstatus` files:
 | Path | Purpose |
 |------|---------|
 | `~/.claude/projects/` | Claude Code session state (encoded project paths as directory names) |
+| `~/.claude-<name>/` | Additional Claude Code profiles (`CLAUDE_CONFIG_DIR`), auto-detected |
 | `~/.claude/projects/<path>/<session-id>.cstatus` | Session status files written by hook script |
 | `~/.claude/projects/<path>/sessions-index.json` | Session index with metadata, prompts, timestamps |
 | `~/.claude/projects/<path>/<uuid>.jsonl` | Conversation logs per session |

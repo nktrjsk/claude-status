@@ -1,10 +1,10 @@
 import Foundation
 
-/// Detects whether the Claude Status hook/plugin is installed.
+/// Detects whether the Claude Status hook/plugin is installed in a profile.
 ///
-/// Checks two installation paths:
-/// 1. **Plugin** — `claude-status` in `~/.claude/plugins/installed_plugins.json`
-/// 2. **User hooks** — `session-status` references in `~/.claude/settings.json` hooks
+/// Checks two installation paths inside the profile's config dir:
+/// 1. **Plugin** — `claude-status` in `<dir>/plugins/installed_plugins.json`
+/// 2. **User hooks** — `session-status` references in `<dir>/settings.json` hooks
 ///
 /// If either is found, the hook is considered installed.
 enum PluginInstallState {
@@ -12,16 +12,21 @@ enum PluginInstallState {
     case installed
     /// No plugin or hooks detected — sessions won't produce .cstatus files.
     case notInstalled
-    /// Could not determine (e.g., ~/.claude doesn't exist).
+    /// Could not determine (e.g., the config dir doesn't exist).
     case unknown
 }
 
 struct PluginDetector {
 
-    private static let claudeDir: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
+    /// The profile's config directory (defaults to `~/.claude`).
+    let claudeDir: URL
+
+    init(
+        claudeDir: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude")
-    }()
+    ) {
+        self.claudeDir = claudeDir
+    }
 
     /// Checks whether the session-status hook is available through any path.
     func detect() -> PluginInstallState {
@@ -34,7 +39,7 @@ struct PluginDetector {
 
         // If ~/.claude doesn't exist at all, we can't determine
         let fm = FileManager.default
-        if !fm.fileExists(atPath: Self.claudeDir.path) {
+        if !fm.fileExists(atPath: claudeDir.path) {
             return .unknown
         }
 
@@ -44,7 +49,7 @@ struct PluginDetector {
     /// Returns the installed plugin version from `~/.claude/plugins/installed_plugins.json`,
     /// or nil if the plugin is not installed or the version can't be determined.
     func installedPluginVersion() -> String? {
-        let url = Self.claudeDir
+        let url = claudeDir
             .appendingPathComponent("plugins/installed_plugins.json")
 
         guard let data = try? Data(contentsOf: url),
@@ -70,7 +75,7 @@ struct PluginDetector {
     /// Looks for any plugin key containing "claude-status" in installed_plugins.json,
     /// and verifies it's enabled in settings.json.
     private func checkInstalledPlugins() -> Bool {
-        let url = Self.claudeDir
+        let url = claudeDir
             .appendingPathComponent("plugins/installed_plugins.json")
 
         guard let data = try? Data(contentsOf: url),
@@ -83,7 +88,7 @@ struct PluginDetector {
         guard installed else { return false }
 
         // Also verify it's enabled
-        let settingsURL = Self.claudeDir.appendingPathComponent("settings.json")
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
         guard let settingsData = try? Data(contentsOf: settingsURL),
               let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
               let enabled = settings["enabledPlugins"] as? [String: Bool] else {
@@ -97,7 +102,7 @@ struct PluginDetector {
 
     /// Looks for session-status references in ~/.claude/settings.json hooks.
     private func checkSettingsHooks() -> Bool {
-        let url = Self.claudeDir
+        let url = claudeDir
             .appendingPathComponent("settings.json")
 
         guard let data = try? Data(contentsOf: url),
