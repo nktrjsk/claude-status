@@ -12,8 +12,11 @@ struct Main {
             assertionFailure("Missing bundle identifier")
             return
         }
+        // Skip the single-instance check under XCTest — the test host must keep
+        // running even when the installed app is already in the menu bar.
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        if running.count > 1 {
+        if !isTesting, running.count > 1 {
             // Activate the other instance (the one that isn't us)
             let me = ProcessInfo.processInfo.processIdentifier
             if let other = running.first(where: { $0.processIdentifier != me }) {
