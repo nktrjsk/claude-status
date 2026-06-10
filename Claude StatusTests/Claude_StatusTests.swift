@@ -226,7 +226,7 @@ struct ProfileStoreTests {
             )
         }
         let suiteName = "test-profiles-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
         let store = ProfileStore(defaults: defaults, homeDirectory: home)
         return (store, home, defaults, suiteName)
     }
@@ -266,7 +266,7 @@ struct ProfileStoreTests {
         )
         defer { cleanup(home: home, suiteName: suite) }
 
-        let work = store.profiles.first { $0.derivedName == "work" }!
+        let work = try #require(store.profiles.first { $0.derivedName == "work" })
         store.setEnabled(false, for: work)
         #expect(store.enabledProfiles.map(\.derivedName) == ["default"])
 
@@ -296,18 +296,31 @@ struct ProfileStoreTests {
         defer { cleanup(home: home, suiteName: suite) }
 
         let custom = home.appendingPathComponent("custom-config")
-        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: custom.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
         store.addManualProfile(at: custom)
         #expect(store.profiles.count == 2)
 
         let reloaded = ProfileStore(defaults: defaults, homeDirectory: home)
-        let manual = reloaded.profiles.first { !$0.isAutoDetected }
-        #expect(manual?.directory.path == custom.path)
+        let manual = try #require(reloaded.profiles.first { !$0.isAutoDetected })
+        #expect(manual.directory.path == custom.path)
 
-        reloaded.removeManualProfile(manual!)
+        reloaded.removeManualProfile(manual)
         #expect(reloaded.profiles.count == 1)
 
         let reloadedAgain = ProfileStore(defaults: defaults, homeDirectory: home)
         #expect(reloadedAgain.profiles.count == 1)
+    }
+
+    @Test func rejectsManualProfileWithoutMarkers() throws {
+        let (store, home, _, suite) = try makeStore(profileDirs: [".claude"])
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let bogus = home.appendingPathComponent("not-a-config")
+        try FileManager.default.createDirectory(at: bogus, withIntermediateDirectories: true)
+        store.addManualProfile(at: bogus)
+        #expect(store.profiles.count == 1)
     }
 }

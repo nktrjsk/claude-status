@@ -126,7 +126,7 @@ final class ProfileStore {
     }
 
     /// A directory counts as a profile if it has a `projects/` dir or `settings.json`.
-    nonisolated private static func looksLikeProfile(_ url: URL) -> Bool {
+    nonisolated static func looksLikeProfile(_ url: URL) -> Bool {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         if fm.fileExists(atPath: url.appendingPathComponent("projects").path, isDirectory: &isDir),
@@ -159,9 +159,14 @@ final class ProfileStore {
         onChange?()
     }
 
+    /// Adds a profile at a user-chosen location. Rejects directories that
+    /// don't look like Claude Code config dirs, and duplicates.
     func addManualProfile(at url: URL) {
         let standardized = url.standardizedFileURL
-        guard !profiles.contains(where: { $0.directory.path == standardized.path }) else { return }
+        guard Self.looksLikeProfile(standardized),
+              !profiles.contains(where: { $0.directory.path == standardized.path }) else {
+            return
+        }
         profiles.append(ClaudeProfile(
             directory: standardized,
             isAutoDetected: false,

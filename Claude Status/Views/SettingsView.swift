@@ -95,6 +95,14 @@ struct SettingsView: View {
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         panel.message = "Choose a Claude Code config directory (CLAUDE_CONFIG_DIR)"
         if panel.runModal() == .OK, let url = panel.url {
+            guard ProfileStore.looksLikeProfile(url) else {
+                let alert = NSAlert()
+                alert.messageText = "Not a Claude Code Config Directory"
+                alert.informativeText = "The selected folder has no projects/ directory or settings.json."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
             profileStore.addManualProfile(at: url)
         }
     }
@@ -173,7 +181,9 @@ private struct ProfileRowView: View {
 
     private func commitName() {
         profileStore.setLabel(editedName, for: profile)
-        editedName = profile.displayName
+        // `profile` is a pre-mutation copy; read the normalized name back from the store
+        let updated = profileStore.profiles.first { $0.id == profile.id }
+        editedName = (updated ?? profile).displayName
     }
 
     @ViewBuilder

@@ -89,6 +89,9 @@ final class SessionMonitor {
     }
 
     func stop() {
+        stateResolver.onProjectsChanged = nil
+        profileStore.onChange = nil
+        stateResolver.updateWatchedDirectories([])
         timer?.invalidate()
         timer = nil
         unregisterDarwinNotification()
@@ -204,16 +207,19 @@ final class SessionMonitor {
     }
 
     /// Plugin state across profiles: missing in any enabled profile wins,
-    /// otherwise installed if at least one profile has it.
+    /// then undeterminable in any profile, otherwise installed if at least
+    /// one profile has it.
     static func aggregatePluginState(for profiles: [ClaudeProfile]) -> PluginInstallState {
         var sawInstalled = false
+        var sawUnknown = false
         for profile in profiles {
             switch PluginDetector(claudeDir: profile.directory).detect() {
             case .notInstalled: return .notInstalled
             case .installed: sawInstalled = true
-            case .unknown: break
+            case .unknown: sawUnknown = true
             }
         }
+        if sawUnknown { return .unknown }
         return sawInstalled ? .installed : .unknown
     }
 

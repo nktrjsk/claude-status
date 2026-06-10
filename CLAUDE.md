@@ -107,7 +107,7 @@ assets/                                # Marketing assets (screenshot, icons)
 
 ### Profiles
 
-The app supports multiple Claude Code profiles (config dirs selected via `CLAUDE_CONFIG_DIR`). `ProfileStore` auto-detects `~/.claude` and `~/.claude-*` directories (validated by a `projects/` dir or `settings.json`); custom locations can be added manually in Settings. Each profile can be enabled/disabled and renamed; settings persist in the App Group defaults under `claudeProfiles`. Discovery, file watching, and plugin detection/installation all operate per enabled profile (the installer passes `CLAUDE_CONFIG_DIR` to the `claude` CLI). The hook plugin needs no profile awareness — it writes `.cstatus` next to the transcript path Claude Code provides, which already lives in the profile's `projects/` dir.
+The app supports multiple Claude Code profiles (config dirs selected via `CLAUDE_CONFIG_DIR`). `ProfileStore` auto-detects `~/.claude` (the "default" profile) and `~/.claude-*` directories (validated by a `projects/` dir or `settings.json`); custom locations can be added manually in Settings. Each profile can be enabled/disabled and renamed; settings persist in the App Group defaults under `claudeProfiles`. Discovery, file watching, and plugin detection/installation all operate per enabled profile (the installer passes `CLAUDE_CONFIG_DIR` to the `claude` CLI). The hook plugin needs no profile awareness — it writes `.cstatus` next to the transcript path Claude Code provides, which already lives in the profile's `projects/` dir.
 
 ### Session Discovery Pipeline
 
