@@ -4,6 +4,9 @@ scheme := "Claude Status"
 xcode_flags := "CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=15.0"
 app_name := "Claude Status"
 team_id := env_var_or_default("DEVELOPMENT_TEAM", "6ZWB9X826X")
+# App group override for forks: team-prefixed groups (TEAMID.name) need no
+# provisioning profile on macOS, unlike the group.* release identifier.
+app_group := env_var_or_default("APP_GROUP_ID", "group.com.poisonpenllc.Claude-Status")
 
 # Calculate version from git tags: tag + .devN for unreleased commits
 version := `tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0"); commits=$(git rev-list --count "$tag"...HEAD 2>/dev/null || echo "0"); if [ "$commits" -gt 0 ]; then echo "$tag.dev$commits"; else echo "$tag"; fi`
@@ -47,6 +50,7 @@ swap: build-plugin
         MACOSX_DEPLOYMENT_TARGET=15.0 \
         CODE_SIGN_STYLE=Automatic \
         DEVELOPMENT_TEAM="{{team_id}}" \
+        APP_GROUP_ID="{{app_group}}" \
         MARKETING_VERSION="{{version}}"
     pkill -x "{{app_name}}" || true
     sleep 0.5
