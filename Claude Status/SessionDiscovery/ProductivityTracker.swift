@@ -20,9 +20,7 @@ final class ProductivityTracker {
     private let sharedContainerURL: URL?
 
     init() {
-        sharedContainerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.poisonpenllc.Claude-Status"
-        )
+        sharedContainerURL = AppGroup.containerURL
         currentData = Self.loadData(from: sharedContainerURL) ?? ProductivityData(
             today: .empty(),
             allTime: .empty()

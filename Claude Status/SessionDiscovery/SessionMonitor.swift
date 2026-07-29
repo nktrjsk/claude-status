@@ -3,9 +3,10 @@ import WidgetKit
 
 /// Monitors Claude Code sessions by scanning .cstatus files and filesystem state.
 ///
+/// Sessions are discovered across all enabled profiles (Claude Code config dirs).
 /// Uses three complementary mechanisms for timely updates:
 /// 1. **Darwin notifications** — instant push from the hook script via `notifyutil -p`
-/// 2. **File system watching** — `DispatchSource` on `~/.claude/projects/`
+/// 2. **File system watching** — `DispatchSource` on each profile's `projects/` dir
 /// 3. **Polling timer** — 5s fallback for sessions without hooks (IDE agents, etc.)
 @Observable
 @MainActor
@@ -14,9 +15,12 @@ final class SessionMonitor {
     private(set) var sessions: [ClaudeSession] = []
     private(set) var productivityData: ProductivityData = ProductivityData(today: .empty(), allTime: .empty())
 
-    /// Whether the Claude Code session-status plugin is installed.
-    /// Based on `PluginDetector` checking installed_plugins.json and settings.json hooks.
-    /// `true` = installed, `false` = not installed, `nil` = can't determine.
+    /// The set of known Claude Code profiles (config dirs).
+    let profileStore: ProfileStore
+
+    /// Whether the Claude Code session-status plugin is installed in all enabled profiles.
+    /// `true` = installed everywhere, `false` = missing in at least one enabled profile,
+    /// `nil` = can't determine.
     private(set) var hookDetected: Bool?
 
     /// The most urgent state across all sessions, or nil if none.
@@ -26,7 +30,6 @@ final class SessionMonitor {
 
     private var discovery: SessionDiscovery
     private let stateResolver: StateResolver
-    private let pluginDetector: PluginDetector
     private let tracker: ProductivityTracker
     nonisolated(unsafe) private var timer: Timer?
     private let scanInterval: TimeInterval
@@ -39,6 +42,10 @@ final class SessionMonitor {
     private var cachedPluginState: PluginInstallState = .unknown
     private static let pluginCheckInterval: TimeInterval = 30
 
+    /// Throttle re-detection of profile directories in $HOME.
+    private var lastProfileRefresh: Date = .distantPast
+    private static let profileRefreshInterval: TimeInterval = 30
+
     /// Throttle widget reloads to avoid excessive writes on every 5s poll.
     private var lastWidgetUpdate: Date = .distantPast
     private static let widgetUpdateInterval: TimeInterval = 30
@@ -50,7 +57,7 @@ final class SessionMonitor {
         self.scanInterval = scanInterval
         self.discovery = SessionDiscovery()
         self.stateResolver = StateResolver()
-        self.pluginDetector = PluginDetector()
+        self.profileStore = ProfileStore()
         self.tracker = ProductivityTracker()
     }
 
@@ -65,6 +72,11 @@ final class SessionMonitor {
             self?.refresh()
         }
 
+        profileStore.onChange = { [weak self] in
+            self?.handleProfilesChanged()
+        }
+        updateWatchedDirectories()
+
         registerDarwinNotification()
         refresh()
 
@@ -77,6 +89,9 @@ final class SessionMonitor {
     }
 
     func stop() {
+        stateResolver.onProjectsChanged = nil
+        profileStore.onChange = nil
+        stateResolver.updateWatchedDirectories([])
         timer?.invalidate()
         timer = nil
         unregisterDarwinNotification()
@@ -112,11 +127,35 @@ final class SessionMonitor {
 
     // MARK: - Refresh
 
-    /// Full refresh: directory scan + PID validation.
+    /// Full refresh: directory scan + PID validation across all enabled profiles.
     /// Called on timer ticks and file system changes.
     func refresh() {
-        let result = discovery.discoverAll()
+        refreshProfilesIfStale()
+        let result = discovery.discoverAll(profiles: profileStore.enabledProfiles)
         applyResult(result)
+    }
+
+    /// Periodically re-detects profile directories so new `~/.claude-*` dirs
+    /// show up without a restart.
+    private func refreshProfilesIfStale() {
+        let now = Date()
+        guard now.timeIntervalSince(lastProfileRefresh) >= Self.profileRefreshInterval else { return }
+        lastProfileRefresh = now
+        profileStore.refresh()
+    }
+
+    /// Reacts to profile list/settings changes: rewires watchers and rescans.
+    private func handleProfilesChanged() {
+        updateWatchedDirectories()
+        invalidatePluginCache()
+        let result = discovery.discoverAll(profiles: profileStore.enabledProfiles)
+        applyResult(result)
+    }
+
+    private func updateWatchedDirectories() {
+        stateResolver.updateWatchedDirectories(
+            profileStore.enabledProfiles.map(\.projectsDirectory)
+        )
     }
 
     /// Notification-driven refresh: always do a full scan since the notification
@@ -157,7 +196,7 @@ final class SessionMonitor {
     private func updatePluginState() {
         let now = Date()
         if now.timeIntervalSince(lastPluginCheck) >= Self.pluginCheckInterval {
-            cachedPluginState = pluginDetector.detect()
+            cachedPluginState = Self.aggregatePluginState(for: profileStore.enabledProfiles)
             lastPluginCheck = now
         }
         switch cachedPluginState {
@@ -165,6 +204,23 @@ final class SessionMonitor {
         case .notInstalled: hookDetected = false
         case .unknown: hookDetected = nil
         }
+    }
+
+    /// Plugin state across profiles: missing in any enabled profile wins,
+    /// then undeterminable in any profile, otherwise installed if at least
+    /// one profile has it.
+    static func aggregatePluginState(for profiles: [ClaudeProfile]) -> PluginInstallState {
+        var sawInstalled = false
+        var sawUnknown = false
+        for profile in profiles {
+            switch PluginDetector(claudeDir: profile.directory).detect() {
+            case .notInstalled: return .notInstalled
+            case .installed: sawInstalled = true
+            case .unknown: sawUnknown = true
+            }
+        }
+        if sawUnknown { return .unknown }
+        return sawInstalled ? .installed : .unknown
     }
 
     /// Forces a fresh plugin detection check (e.g. after install/uninstall).
@@ -175,9 +231,7 @@ final class SessionMonitor {
     // MARK: - Shared Data
 
     private func writeToSharedContainer() {
-        guard let sharedURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.poisonpenllc.Claude-Status"
-        ) else {
+        guard let sharedURL = AppGroup.containerURL else {
             return
         }
 

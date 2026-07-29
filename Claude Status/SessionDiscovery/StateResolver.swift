@@ -1,28 +1,21 @@
 import Foundation
 
 /// Resolves session state from JSONL files as a fallback for sessions without .cstatus files.
-/// Also watches the projects directory for filesystem changes.
+/// Also watches each profile's projects directory for filesystem changes.
 @MainActor
 final class StateResolver {
 
-    private static let claudeProjectsDir: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
-    }()
+    /// Active directory watchers, keyed by watched path.
+    private var fileWatchers: [String: DispatchSourceFileSystemObject] = [:]
 
-    private var fileWatcher: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
-
-    /// Callback invoked when the projects directory changes.
+    /// Callback invoked when any watched projects directory changes.
     var onProjectsChanged: (() -> Void)?
 
-    init() {
-        setupFileWatcher()
-    }
-
     deinit {
-        // Cancel the watcher; the cancel handler closes the file descriptor.
-        fileWatcher?.cancel()
+        // Cancel the watchers; each cancel handler closes its file descriptor.
+        for watcher in fileWatchers.values {
+            watcher.cancel()
+        }
     }
 
     /// Resolves state from JSONL modification times for a given project directory.
@@ -66,16 +59,31 @@ final class StateResolver {
 
     // MARK: - File Watching
 
-    private func setupFileWatcher() {
-        let projectsPath = Self.claudeProjectsDir.path
+    /// Reconciles the active watchers with the given set of projects directories:
+    /// drops watchers for removed dirs, adds watchers for new ones.
+    func updateWatchedDirectories(_ directories: [URL]) {
+        let newPaths = Set(directories.map(\.path))
 
+        for path in Set(fileWatchers.keys).subtracting(newPaths) {
+            fileWatchers[path]?.cancel()
+            fileWatchers[path] = nil
+        }
+
+        for dir in directories where fileWatchers[dir.path] == nil {
+            if let watcher = makeFileWatcher(for: dir) {
+                fileWatchers[dir.path] = watcher
+            }
+        }
+    }
+
+    private func makeFileWatcher(for projectsDir: URL) -> DispatchSourceFileSystemObject? {
         try? FileManager.default.createDirectory(
-            at: Self.claudeProjectsDir,
+            at: projectsDir,
             withIntermediateDirectories: true
         )
 
-        fileDescriptor = open(projectsPath, O_EVTONLY)
-        guard fileDescriptor >= 0 else { return }
+        let fileDescriptor = open(projectsDir.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else { return nil }
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fileDescriptor,
@@ -87,14 +95,12 @@ final class StateResolver {
             self?.onProjectsChanged?()
         }
 
-        source.setCancelHandler { [weak self] in
-            guard let self, self.fileDescriptor >= 0 else { return }
-            close(self.fileDescriptor)
-            self.fileDescriptor = -1
+        source.setCancelHandler {
+            close(fileDescriptor)
         }
 
         source.resume()
-        fileWatcher = source
+        return source
     }
 
     // MARK: - JSONL Helpers

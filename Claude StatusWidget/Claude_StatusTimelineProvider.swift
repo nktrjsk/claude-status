@@ -85,9 +85,7 @@ nonisolated struct Claude_StatusTimelineProvider: TimelineProvider {
 
     /// Fetches current Claude sessions from the shared data container.
     private func fetchSessions() -> [ClaudeSession] {
-        guard let sharedURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.poisonpenllc.Claude-Status"
-        ) else {
+        guard let sharedURL = AppGroup.containerURL else {
             return []
         }
 

@@ -4,12 +4,14 @@ import SwiftUI
 struct SessionListView: View {
     let sessions: [ClaudeSession]
     let productivityData: ProductivityData
+    /// Show per-session profile badges (when more than one profile is enabled).
+    var showProfileBadges: Bool = false
     var onSessionTap: ((ClaudeSession) -> Void)?
     var onRefresh: (() -> Void)?
     var onSettings: (() -> Void)?
     var onQuit: (() -> Void)?
 
-    @AppStorage("iconStyle", store: UserDefaults(suiteName: "group.com.poisonpenllc.Claude-Status"))
+    @AppStorage("iconStyle", store: AppGroup.defaults)
     private var iconStyle: SessionIconStyle = .emoji
 
     @State private var isRefreshing = false
@@ -113,7 +115,11 @@ struct SessionListView: View {
                     Button {
                         onSessionTap?(session)
                     } label: {
-                        SessionRowView(session: session, iconStyle: iconStyle)
+                        SessionRowView(
+                            session: session,
+                            iconStyle: iconStyle,
+                            showProfileBadge: showProfileBadges
+                        )
                     }
                     .buttonStyle(.plain)
                 }

@@ -197,7 +197,7 @@ struct SessionRowWidget: View {
 
     /// Read the user's icon style preference from the shared App Group defaults.
     private var iconStyle: String {
-        UserDefaults(suiteName: "group.com.poisonpenllc.Claude-Status")?
+        AppGroup.defaults?
             .string(forKey: "iconStyle") ?? "emoji"
     }
 

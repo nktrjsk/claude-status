@@ -17,6 +17,8 @@ enum SessionIconStyle: String, CaseIterable {
 struct SessionRowView: View {
     let session: ClaudeSession
     var iconStyle: SessionIconStyle = .emoji
+    /// Show which profile the session belongs to (multi-profile setups).
+    var showProfileBadge: Bool = false
 
     @State private var isHovered = false
 
@@ -31,6 +33,15 @@ struct SessionRowView: View {
                     .lineLimit(1)
 
                 HStack(spacing: 4) {
+                    if showProfileBadge, let profileName = session.profileName {
+                        Text(profileName)
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15))
+                            .foregroundStyle(.secondary)
+                            .clipShape(Capsule())
+                    }
                     if session.sessionName != nil {
                         Text(session.projectName)
                             .font(.system(size: 10))

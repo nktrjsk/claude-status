@@ -124,11 +124,11 @@ struct SessionStateTests {
 
 struct SessionDiscoveryTests {
 
-    @Test func discoverAllReturnsEmptyWhenNoFiles() {
+    @Test func discoverAllReturnsEmptyWithoutProfiles() {
         var discovery = SessionDiscovery()
-        let result = discovery.discoverAll()
-        // May find real sessions if claude is running; just verify it doesn't crash
-        #expect(result.sessions.count >= 0)
+        let result = discovery.discoverAll(profiles: [])
+        #expect(result.sessions.isEmpty)
+        #expect(result.cstatusFiles.isEmpty)
     }
 
     @Test func deadSessionsSkipped() {
@@ -138,5 +138,189 @@ struct SessionDiscoveryTests {
 
         discovery.clearDeadSessions()
         #expect(discovery.deadSessions.isEmpty)
+    }
+
+    @Test func discoverAllScansEveryProfile() throws {
+        // Two temp profiles, each with one .cstatus pointing at a bogus PID.
+        // Both session IDs landing in deadSessions proves both dirs were scanned.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-status-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var profiles: [ClaudeProfile] = []
+        for name in ["alpha", "beta"] {
+            let dir = root.appendingPathComponent(".claude-\(name)")
+            let projectDir = dir.appendingPathComponent("projects/-tmp-test")
+            try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+            let cstatus = """
+            {"session_id": "session-\(name)", "pid": 999999999, "state": "active", \
+            "timestamp": "2026-01-01T00:00:00Z", "cwd": "/tmp/test"}
+            """
+            try cstatus.write(
+                to: projectDir.appendingPathComponent("session-\(name).cstatus"),
+                atomically: true,
+                encoding: .utf8
+            )
+            profiles.append(ClaudeProfile(
+                directory: dir,
+                isAutoDetected: false,
+                customLabel: nil,
+                isEnabled: true
+            ))
+        }
+
+        var discovery = SessionDiscovery()
+        let result = discovery.discoverAll(profiles: profiles)
+
+        #expect(result.sessions.isEmpty)
+        #expect(discovery.deadSessions.contains("session-alpha"))
+        #expect(discovery.deadSessions.contains("session-beta"))
+    }
+}
+
+struct ClaudeProfileTests {
+
+    private func profile(at path: String) -> ClaudeProfile {
+        ClaudeProfile(
+            directory: URL(fileURLWithPath: path),
+            isAutoDetected: true,
+            customLabel: nil,
+            isEnabled: true
+        )
+    }
+
+    @Test func derivedNames() {
+        #expect(profile(at: "/Users/me/.claude").derivedName == "default")
+        #expect(profile(at: "/Users/me/.claude-harmonum").derivedName == "harmonum")
+        #expect(profile(at: "/Users/me/.claude-personal").derivedName == "personal")
+        #expect(profile(at: "/Volumes/work/myprofile").derivedName == "myprofile")
+        #expect(profile(at: "/Users/me/.config").derivedName == "config")
+    }
+
+    @Test func displayNamePrefersCustomLabel() {
+        var p = profile(at: "/Users/me/.claude-harmonum")
+        #expect(p.displayName == "harmonum")
+        p.customLabel = "Work"
+        #expect(p.displayName == "Work")
+        p.customLabel = ""
+        #expect(p.displayName == "harmonum")
+    }
+
+    @Test func projectsDirectory() {
+        let p = profile(at: "/Users/me/.claude-harmonum")
+        #expect(p.projectsDirectory.path == "/Users/me/.claude-harmonum/projects")
+    }
+}
+
+@MainActor
+struct ProfileStoreTests {
+
+    /// Creates a fake $HOME with the given profile dirs and an isolated defaults suite.
+    private func makeStore(profileDirs: [String]) throws -> (ProfileStore, URL, UserDefaults, String) {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-status-home-\(UUID().uuidString)")
+        for dir in profileDirs {
+            try FileManager.default.createDirectory(
+                at: home.appendingPathComponent(dir).appendingPathComponent("projects"),
+                withIntermediateDirectories: true
+            )
+        }
+        let suiteName = "test-profiles-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let store = ProfileStore(defaults: defaults, homeDirectory: home)
+        return (store, home, defaults, suiteName)
+    }
+
+    private func cleanup(home: URL, suiteName: String) {
+        try? FileManager.default.removeItem(at: home)
+        UserDefaults().removePersistentDomain(forName: suiteName)
+    }
+
+    @Test func detectsClaudeDirectories() throws {
+        let (store, home, _, suite) = try makeStore(
+            profileDirs: [".claude", ".claude-work", ".not-claude"]
+        )
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let names = store.profiles.map(\.derivedName).sorted()
+        #expect(names == ["default", "work"])
+        #expect(store.profiles.allSatisfy { $0.isEnabled })
+    }
+
+    @Test func ignoresDirectoriesWithoutProfileMarkers() throws {
+        let (_, home, defaults, suite) = try makeStore(profileDirs: [".claude-real"])
+        defer { cleanup(home: home, suiteName: suite) }
+
+        // A .claude-* dir with no projects/ or settings.json is not a profile
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".claude-empty"),
+            withIntermediateDirectories: true
+        )
+        let store = ProfileStore(defaults: defaults, homeDirectory: home)
+        #expect(store.profiles.map(\.derivedName) == ["real"])
+    }
+
+    @Test func disabledStatePersistsAcrossRefresh() throws {
+        let (store, home, defaults, suite) = try makeStore(
+            profileDirs: [".claude", ".claude-work"]
+        )
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let work = try #require(store.profiles.first { $0.derivedName == "work" })
+        store.setEnabled(false, for: work)
+        #expect(store.enabledProfiles.map(\.derivedName) == ["default"])
+
+        // A fresh store from the same defaults sees the saved state
+        let reloaded = ProfileStore(defaults: defaults, homeDirectory: home)
+        #expect(reloaded.profiles.first { $0.derivedName == "work" }?.isEnabled == false)
+    }
+
+    @Test func customLabelPersistsAndClears() throws {
+        let (store, home, defaults, suite) = try makeStore(profileDirs: [".claude-work"])
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let work = store.profiles[0]
+        store.setLabel("Harmonum", for: work)
+        #expect(store.profiles[0].displayName == "Harmonum")
+
+        let reloaded = ProfileStore(defaults: defaults, homeDirectory: home)
+        #expect(reloaded.profiles[0].displayName == "Harmonum")
+
+        // Setting the derived name back clears the override
+        store.setLabel("work", for: store.profiles[0])
+        #expect(store.profiles[0].customLabel == nil)
+    }
+
+    @Test func manualProfilesPersistAndRemove() throws {
+        let (store, home, defaults, suite) = try makeStore(profileDirs: [".claude"])
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let custom = home.appendingPathComponent("custom-config")
+        try FileManager.default.createDirectory(
+            at: custom.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        store.addManualProfile(at: custom)
+        #expect(store.profiles.count == 2)
+
+        let reloaded = ProfileStore(defaults: defaults, homeDirectory: home)
+        let manual = try #require(reloaded.profiles.first { !$0.isAutoDetected })
+        #expect(manual.directory.path == custom.path)
+
+        reloaded.removeManualProfile(manual)
+        #expect(reloaded.profiles.count == 1)
+
+        let reloadedAgain = ProfileStore(defaults: defaults, homeDirectory: home)
+        #expect(reloadedAgain.profiles.count == 1)
+    }
+
+    @Test func rejectsManualProfileWithoutMarkers() throws {
+        let (store, home, _, suite) = try makeStore(profileDirs: [".claude"])
+        defer { cleanup(home: home, suiteName: suite) }
+
+        let bogus = home.appendingPathComponent("not-a-config")
+        try FileManager.default.createDirectory(at: bogus, withIntermediateDirectories: true)
+        store.addManualProfile(at: bogus)
+        #expect(store.profiles.count == 1)
     }
 }

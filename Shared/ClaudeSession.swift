@@ -126,6 +126,9 @@ struct ClaudeSession: Identifiable, Codable, Equatable {
     let activity: String
     /// Optional custom session name set by the user via /name-session.
     let sessionName: String?
+    /// Display name of the Claude Code profile (config dir) this session belongs to.
+    /// Nil for data written before profile support.
+    var profileName: String? = nil
 
     /// Use sessionId as the SwiftUI identity (stable, unlike PIDs).
     var id: String { sessionId }

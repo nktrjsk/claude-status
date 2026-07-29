@@ -51,9 +51,7 @@ nonisolated struct ProductivityTimelineProvider: TimelineProvider {
     }
 
     private func fetchData() -> ProductivityData? {
-        guard let sharedURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.poisonpenllc.Claude-Status"
-        ) else {
+        guard let sharedURL = AppGroup.containerURL else {
             return nil
         }
 
